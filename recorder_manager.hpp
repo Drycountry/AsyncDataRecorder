@@ -14,6 +14,7 @@ class RecorderManager {
   RecorderManager();
   ~RecorderManager();
 
+  /// @brief 按 id 取记录器，第一次调用时创建
   std::shared_ptr<Recorder> GetRecorder(const std::string& id);
 
  private:

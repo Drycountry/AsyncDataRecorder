@@ -17,12 +17,6 @@
 
 namespace jojo::record2 {
 
-/// @brief BCD 启用状态
-enum class BcdEnable {
-  kEnable,   // 启用 BCD 记录
-  kDisable,  // 禁用 BCD 记录
-};
-
 /// @brief 写线程状态
 enum class WriteState {
   kOk,        // 文件可写，正常落盘
@@ -40,27 +34,24 @@ class Recorder {
   /// @brief 构造函数
   /// @param basic_file_name 基础文件名
   /// @param ext 扩展名（须非空，过渡文件名不含扩展名，据此区分两类文件）
-  Recorder(const std::string& basic_file_name, const std::string& ext, BcdEnable bcd_enable);
+  Recorder(const std::string& basic_file_name, const std::string& ext);
 
   /// @brief 析构函数
   ~Recorder();
 
   /// @brief 保存数据，由外部调用
-  /// @param data 地址（不应为nullptr）
-  /// @param length 长度（＞0）
-  /// @return 是否已接收；false 表示未接收（析构中/已停止接收/超长）或 `length==0` 或 `data==nullptr`
-  ///         或入队时丢弃了某个已满缓存（丢弃量由 `GetDroppedBytes()`获取）
+  /// @return false：未接收（参数非法、已停机、超过缓存容量），或队列满丢了更早的缓存
   bool Save(const std::uint8_t* data, const std::size_t length);
 
-  /// @brief 写线程状态，kStopped/kFatal 均表示已停止接收数据
+  /// @brief 写线程状态
   WriteState GetWriteState() const;
 
-  /// @brief 未落盘的总字节数（best-effort，若ofs.write失败则无法正确计算）
-  std::size_t GetDroppedBytes() const { return dropped_bytes_.load(std::memory_order_acquire); }
+  /// @brief 进入 kFatal 的原因；正常时为 nullptr。返回静态字符串，不需要释放
+  const char* GetLastError() const { return last_error_.load(std::memory_order_acquire); }
 
  private:
-  /// @brief 数据落盘
-  void Write();
+  /// @brief 写线程主体，停机时返回
+  void WriteLoop();
 
   /// @brief 空缓存队列入队（单缓冲）
   void PushToFreeQueue(std::unique_ptr<BufferType>&& elem);
@@ -68,69 +59,68 @@ class Recorder {
   /// @brief 空缓存队列入队（缓冲队列）
   void PushToFreeQueue(std::deque<std::unique_ptr<BufferType>>& queue);
 
-  /// @brief 空缓存队列出队
-  std::unique_ptr<BufferType> PopFromFreeQueue();
+  /// @note 调用方须持有 lock_buffers_
+  std::unique_ptr<BufferType> AcquireBufferLocked();
 
-  /// @brief 满缓存队列入队，视条件通知落盘
+  /// @brief 入满队列，视长度通知写线程
   bool PushToFullQueue(std::unique_ptr<BufferType>&& buffer);
 
-  /// @brief 满缓存队列入队，不受有界队列限制（供析构时交付最后一段数据）
+  /// @brief 入满队列，不受上限限制，供析构时交付最后一段
   void PushToFullQueueForced(std::unique_ptr<BufferType>&& buffer);
+
+  /// @brief 释放缓存池和满队列
+  void ReleasePendingBuffers();
 
   /// @brief 申请缓冲
   std::unique_ptr<BufferType> AllocateBuffer();
 
-  /// @brief 累计一次文件打开失败，返回是否已达重试上限
+  /// @brief 累计一次打开失败，返回是否已达上限
   bool ExceedFileOpenRetryLimit();
 
-  /// @brief 关闭文件并按"建立时间戳_关闭时间戳"定型文件名
-  /// @param ofs 文件流
-  /// @param filepath 待定型的文件路径
+  /// @brief 当前段文件大小，取不到时为 0
+  std::size_t QueryFileSize() const;
+
+  /// @brief flush/close，并按"建立_关闭"时间戳改名
   void FinalizeFile(std::fstream& ofs, const std::filesystem::path& filepath);
 
-  /// @brief 文件轮转
-  /// @param ofs 文件流
-  /// @param old_filepath 旧文件路径（用于重命名）
+  /// @brief 关当前段，开下一段
   void RotateFile(std::fstream& ofs, const std::filesystem::path& old_filepath);
 
-  /// @brief 开始新文件段：记录文件建立时间戳，并分配未被占用的过渡文件名
-  void StartSegment();
+  /// @brief 取建立时间戳，挑一个没被占用的过渡文件名
+  void AllocateSegmentName();
 
-  /// @brief 追加中的过渡文件名（不含扩展名）：基础文件名_文件建立时间戳
-  std::string FilenameStage1() const;
+  /// @brief 追加中的过渡文件名（不含扩展名）：基础文件名_建立时间戳
+  std::string TransitionalFilename() const;
 
   /// @brief 文件关闭后的定型文件名：基础文件名_建立时间戳_关闭时间戳 + 扩展名
-  std::string FilenameStage2() const;
+  std::string FinalizedFilename() const;
 
  private:
   std::string basic_filename_;    // 基础文件名，在此基础上增加序号、时间戳等扩展
   std::string ext_;               // 扩展名，须非空以区分过渡文件名与定型文件名
   std::string current_filename_;  // 当前文件名
 
-  std::string create_time_;  // 当前文件段的建立时间戳
+  std::string create_time_;  // 本段建立时间戳
+  std::size_t filesize_{};   // 已落盘字节数，仅写线程访问；累加计数，免去每批 stat
 
   std::thread thread_;  // 写文件线程
   std::atomic<bool> accepting_{true};
 
-  std::atomic<WriteState> write_state_{WriteState::kOk};  // 写线程状态，供 Save 与外部查询
+  std::atomic<WriteState> write_state_{WriteState::kOk};  // 供 Save 与外部查询
 
-  mutable std::mutex lock_current_buffer_;        // 保护 current_buffer_
-  std::unique_ptr<BufferType> current_buffer_{};  // 当前可用缓存
+  std::atomic<const char*> last_error_{nullptr};  // 指向静态字符串，赋值不分配
 
-  mutable std::mutex lock_free_queue_;                    // 保护 free_queue_
+  // 两者共用一把锁，取/换缓存一次完成
+  mutable std::mutex lock_buffers_;                       // 保护 current_buffer_ 与 free_queue_
+  std::unique_ptr<BufferType> current_buffer_{};          // 当前可用缓存
   std::deque<std::unique_ptr<BufferType>> free_queue_{};  // 空缓存队列
 
   mutable std::mutex lock_full_queue_{};                  // 保护 full_queue_
   std::deque<std::unique_ptr<BufferType>> full_queue_{};  // 满缓存队列
   std::condition_variable cv_write_file_{};               // 条件变量，通知写文件
 
-  BcdEnable bcd_enable_;  // BCD 启用状态
-
   std::atomic<int> file_open_retry_times_{};  // 文件打开失败累计次数
   static inline constexpr std::size_t kMaxFullQueueSize{50};
-
-  std::atomic<std::size_t>
-      dropped_bytes_{};  // 任何原因导致的不会落盘的字节数（best-effort，若ofs.write失败则无法正确计算）
 };
 
 }  // namespace jojo::record2

@@ -14,7 +14,7 @@ std::shared_ptr<Recorder> RecorderManager::GetRecorder(const std::string& id) {
     if (found != recorders_.cend()) {
       out = found->second;
     } else {
-      out = std::make_shared<Recorder>(id, ".dat", BcdEnable::kEnable);
+      out = std::make_shared<Recorder>(id, ".dat");
       recorders_.emplace(id, out);
     }
   }

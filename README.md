@@ -45,8 +45,7 @@ cmake --build build --config Release
 #include "recorder.hpp"
 
 int main() {
-  jojo::record2::Recorder recorder(
-      "session", ".dat", jojo::record2::BcdEnable::kDisable);
+  jojo::record2::Recorder recorder("session", ".dat");
 
   const std::uint8_t payload[] = {0x01, 0x02, 0x03, 0x04};
   const bool accepted = recorder.Save(payload, sizeof(payload));
@@ -58,11 +57,10 @@ int main() {
 
 记录器将数据**原样写入二进制文件**，不会添加记录分隔符或转换数据格式。数据按块写入文件，不保证每次 `Save()` 对应一个独立文件记录。
 
-### 写入状态与丢弃统计
+### 写入状态
 
 ```cpp
 const auto state = recorder.GetWriteState();
-const std::size_t dropped = recorder.GetDroppedBytes();
 ```
 
 `GetWriteState()` 返回以下状态：
@@ -72,7 +70,7 @@ const std::size_t dropped = recorder.GetDroppedBytes();
 - `WriteState::kFatal`：文件打开重试达到上限，记录器已停止接收数据。
 - `WriteState::kStopped`：写线程已停止。
 
-`Save()` 在参数无效、记录器停止接收、单次数据超过内部缓冲区容量，或队列满导致缓冲块被丢弃时返回 `false`。队列满时被丢弃的可能是此前缓冲的数据；如需监控数据损失，请同时检查 `GetDroppedBytes()`。该统计为尽力而为，底层文件写入失败时无法保证精确。
+`Save()` 在参数无效、记录器停止接收、单次数据超过内部缓冲区容量，或队列满导致缓冲块被丢弃时返回 `false`。队列满时被丢弃的是此前缓冲的数据，本条数据已被接收。记录器不统计丢弃字节数；若写入失败或记录器进入 `kFatal`/`kStopped`，应以 `Save()` 返回 `false` 与 `GetWriteState()` 判断是否需要重试或告警。`GetLastError()` 可查询进入 `kFatal` 的原因。
 
 ## 文件命名
 
