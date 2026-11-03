@@ -42,8 +42,8 @@ std::string GetTimestamp() {
 
   char buffer[24]{};  // yyyyMMddTHHmmss.fff 共 19 字符，留余量
   std::snprintf(buffer, sizeof(buffer), "%04d%02d%02dT%02d%02d%02d.%03d", local_time.tm_year + 1900,
-                local_time.tm_mon + 1, local_time.tm_mday, local_time.tm_hour, local_time.tm_min,
-                local_time.tm_sec, static_cast<int>(millis));
+                local_time.tm_mon + 1, local_time.tm_mday, local_time.tm_hour, local_time.tm_min, local_time.tm_sec,
+                static_cast<int>(millis));
   return buffer;
 }
 }  // namespace
@@ -424,13 +424,10 @@ std::string Recorder::FinalFilename() const {
 /// @brief 累计一次文件打开失败，返回是否已达重试上限
 bool Recorder::ExceedFileOpenRetryLimit() {
   ++file_open_retry_times_;
-  if (file_open_retry_times_ >= kFileOpenRetryTimesLimit) {
-    return true;
-  }
-  return false;
+  return file_open_retry_times_ >= kFileOpenRetryTimesLimit;
 }
 
-/// @brief 累计一次写失败，返回是否已达上限
+/// @brief 累计一次写失败，返回是否已达重试上限
 bool Recorder::ExceedWriteFailLimit() {
   ++write_fail_times_;
   return write_fail_times_ >= kWriteFailTimesLimit;
