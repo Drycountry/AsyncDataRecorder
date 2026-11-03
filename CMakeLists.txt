@@ -10,24 +10,12 @@ if(WIN32)
   endif()
 endif()
 
-# ============================================================================
-# 第三方库
-# ============================================================================
-
-# FlatBuffers
-set(FLATBUFFERS_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/flatbuffers")
-add_library(flatbuffers INTERFACE)
-target_include_directories(flatbuffers SYSTEM INTERFACE "${FLATBUFFERS_ROOT}/include")
-
-# 工程自身的实现源文件；可执行文件与单元测试各自编译，不单独建库
 set(RECORDER_SOURCES
   "${CMAKE_CURRENT_SOURCE_DIR}/recorder.hpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/recorder.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/recorder_manager.hpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/recorder_manager.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/fixed_buffer.hpp"
-  "${CMAKE_CURRENT_SOURCE_DIR}/utils.hpp"
-  "${CMAKE_CURRENT_SOURCE_DIR}/utils.cpp"
 )
 
 add_executable(${PROJECT_NAME}
@@ -36,6 +24,11 @@ add_executable(${PROJECT_NAME}
 )
 # 可执行文件不会被其他目标链接，包含目录只需 PRIVATE
 target_include_directories(${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+
+# 第三方库：FlatBuffers
+set(FLATBUFFERS_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/flatbuffers")
+add_library(flatbuffers INTERFACE)
+target_include_directories(flatbuffers SYSTEM INTERFACE "${FLATBUFFERS_ROOT}/include")
 target_link_libraries(${PROJECT_NAME} PRIVATE flatbuffers)
 
 # BUILD_TESTING 默认为 ON，可用 -DBUILD_TESTING=OFF 关闭单元测试

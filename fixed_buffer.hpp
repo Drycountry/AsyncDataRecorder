@@ -19,8 +19,8 @@ class FixedBuffer {
   ~FixedBuffer() = default;
   FixedBuffer(const FixedBuffer &) = delete;
   FixedBuffer(FixedBuffer &&) = delete;
-  FixedBuffer operator=(const FixedBuffer &) = delete;
-  FixedBuffer operator=(FixedBuffer &&) = delete;
+  FixedBuffer &operator=(const FixedBuffer &) = delete;
+  FixedBuffer &operator=(FixedBuffer &&) = delete;
   
   /// @brief 追加数据到内部数组尾部
   void Append(const std::uint8_t *buf, size_t len) {

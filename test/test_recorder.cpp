@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <ctime>
 #include <filesystem>
 #include <string>
 #include <thread>
@@ -70,6 +71,20 @@ bool ParseFinalizedName(const std::string& name, const std::string& basic_filena
   return IsTimestamp(create_time) && IsTimestamp(close_time);
 }
 
+/// @brief 把 yyyyMMddTHHmmss.fff 换算为毫秒数，仅用于比较两枚时间戳的间隔
+std::int64_t TimestampToMillis(const std::string& timestamp) {
+  std::tm tm{};
+  tm.tm_year = std::stoi(timestamp.substr(0, 4)) - 1900;
+  tm.tm_mon = std::stoi(timestamp.substr(4, 2)) - 1;
+  tm.tm_mday = std::stoi(timestamp.substr(6, 2));
+  tm.tm_hour = std::stoi(timestamp.substr(9, 2));
+  tm.tm_min = std::stoi(timestamp.substr(11, 2));
+  tm.tm_sec = std::stoi(timestamp.substr(13, 2));
+  tm.tm_isdst = -1;  // 夏令时由 mktime 自行判断
+  const auto seconds = static_cast<std::int64_t>(std::mktime(&tm));
+  return seconds * 1000 + std::stoi(timestamp.substr(16, 3));
+}
+
 /// @brief 生成 chunks 个定长块首尾相接的数据，第 i 个块的字节值均为 i+1
 std::vector<std::uint8_t> ExpectedChunks(std::size_t chunks, std::size_t chunk_size) {
   std::vector<std::uint8_t> out;
@@ -82,7 +97,7 @@ std::vector<std::uint8_t> ExpectedChunks(std::size_t chunks, std::size_t chunk_s
 }
 
 /// @brief 轮询等待写线程状态达到期望值
-bool WaitForWriteState(const Recorder& recorder, WriteState expect, std::chrono::milliseconds timeout) {
+bool WaitForWriteState(const Recorder& recorder, WriteIoState expect, std::chrono::milliseconds timeout) {
   const auto deadline = std::chrono::steady_clock::now() + timeout;
   while (recorder.GetWriteState() != expect && std::chrono::steady_clock::now() < deadline) {
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -135,6 +150,30 @@ TEST_F(TempWorkDir, FinalizedNameCarriesCreateAndCloseTime) {
   std::string close_time;
   ASSERT_TRUE(ParseFinalizedName(name, "rec_name", create_time, close_time)) << "定型文件名不符：" << name;
   EXPECT_LE(create_time, close_time) << "建立时间戳不应晚于关闭时间戳：" << name;
+}
+
+/// @brief 时间戳的毫秒位须反映真实经过的时间，而非固定为 0
+TEST_F(TempWorkDir, FinalizedTimestampsCarryMilliseconds) {
+  const std::vector<std::uint8_t> data{1, 2, 3};
+  const auto begin = std::chrono::steady_clock::now();
+  {
+    Recorder recorder{"rec_ms", kExt};
+    ASSERT_TRUE(recorder.Save(data.data(), data.size()));
+    std::this_thread::sleep_for(std::chrono::milliseconds(120));  // 让关闭时间戳与建立时间戳拉开差距
+  }  // 析构时取关闭时间戳
+  const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - begin).count();
+
+  const auto finalized = FindFinalizedFiles(dir(), "rec_ms", kExt);
+  ASSERT_EQ(finalized.size(), 1u);
+
+  const std::string name = finalized.front().filename().string();
+  std::string create_time;
+  std::string close_time;
+  ASSERT_TRUE(ParseFinalizedName(name, "rec_ms", create_time, close_time)) << "定型文件名不符：" << name;
+
+  const auto span = TimestampToMillis(close_time) - TimestampToMillis(create_time);
+  EXPECT_GE(span, 100) << "毫秒位可能未生效：" << create_time << " -> " << close_time;
+  EXPECT_LE(span, elapsed + 100) << "时间戳间隔超出实际耗时：" << create_time << " -> " << close_time;
 }
 
 /// @brief 跨越多级缓存的数据必须按写入顺序完整落盘
@@ -235,7 +274,7 @@ TEST_F(TempWorkDir, WriteStateBecomesFatalWhenFileUnopenable) {
     Recorder recorder{"no_such_dir/rec_fatal", kExt};
     ASSERT_TRUE(recorder.Save(data.data(), data.size()));
 
-    ASSERT_TRUE(WaitForWriteState(recorder, WriteState::kFatal, std::chrono::seconds(5)))
+    ASSERT_TRUE(WaitForWriteState(recorder, WriteIoState::kFatal, std::chrono::seconds(5)))
         << "写线程未在重试上限后放弃落盘";
 
     // 停止接收的原因应可查询

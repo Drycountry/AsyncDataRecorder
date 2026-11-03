@@ -6,7 +6,7 @@
 
 - **异步写入**：`Save()` 将数据复制到内部缓冲区，文件 I/O 在后台线程执行。
 - **批量落盘**：满缓冲块累计到一定数量时触发写入；没有新数据时，后台线程也会定期检查并提交当前缓冲区。
-- **有界待写队列**：限制满缓冲队列长度，避免写入速度跟不上时队列无限增长；可通过接口查询累计丢弃字节数。
+- **有界待写队列**：限制满缓冲队列长度，避免写入速度跟不上时队列无限增长。
 - **文件分段与轮转**：每段文件关闭时使用创建和关闭时间戳命名；文件达到约 2 GiB 后开始新文件段。
 - **关闭时收尾**：记录器析构时停止接收数据，并等待后台写线程退出。
 - **并发访问**：`RecorderManager` 可按 ID 获取共享的记录器实例。
@@ -65,10 +65,10 @@ const auto state = recorder.GetWriteState();
 
 `GetWriteState()` 返回以下状态：
 
-- `WriteState::kOk`：文件可写。
-- `WriteState::kRetrying`：文件暂时不可用，正在重试。
-- `WriteState::kFatal`：文件打开重试达到上限，记录器已停止接收数据。
-- `WriteState::kStopped`：写线程已停止。
+- `WriteIoState::kOk`：文件可写。打开文件后从未写过数据时也会报此状态，写失败后需等到下一次写完并刷新成功才恢复。
+- `WriteIoState::kRetrying`：文件打开或写文件失败，正在退避重试。
+- `WriteIoState::kFatal`：文件打开失败或连续写文件失败达到上限，记录器已停止接收数据。
+- `WriteIoState::kStopped`：写线程已停止。
 
 `Save()` 在参数无效、记录器停止接收、单次数据超过内部缓冲区容量，或队列满导致缓冲块被丢弃时返回 `false`。队列满时被丢弃的是此前缓冲的数据，本条数据已被接收。记录器不统计丢弃字节数；若写入失败或记录器进入 `kFatal`/`kStopped`，应以 `Save()` 返回 `false` 与 `GetWriteState()` 判断是否需要重试或告警。`GetLastError()` 可查询进入 `kFatal` 的原因。
 
@@ -86,7 +86,7 @@ const auto state = recorder.GetWriteState();
 session_20261015T104827.321_20261015T104832.456.dat
 ```
 
-时间戳使用本地时间，精确到毫秒。写入期间使用不带扩展名的临时文件名；正常关闭后，非空文件会重命名为上述格式。
+时间戳使用本地时间，精确到毫秒。写入期间使用不带扩展名的临时文件名；正常关闭后，非空文件会重命名为上述格式。若定型文件名已被占用（同一毫秒建立、同一毫秒关闭的同名记录器），会在扩展名前追加 `_1`、`_2` 等序号，不会覆盖已有文件。
 
 ## 项目结构
 
@@ -94,8 +94,8 @@ session_20261015T104827.321_20261015T104832.456.dat
 .
 ├── CMakeLists.txt
 ├── main.cpp                 # 示例程序入口
-├── recorder.hpp/.cpp        # 异步记录器
-├── recorder_manager.hpp/.cpp# 按 ID 管理记录器
+├── recorder.hpp/.cpp        # 异步记录器（时间戳工具也在 recorder.cpp 内）
+├── recorder_manager.hpp/.cpp # 按 ID 管理记录器
 ├── fixed_buffer.hpp         # 固定大小缓冲区
-└── utils.hpp/.cpp           # 时间戳工具
+└── test/                    # GoogleTest 单元测试
 ```

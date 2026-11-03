@@ -22,7 +22,6 @@ endif()
 add_executable(recorder_unit_tests
   test_helpers.hpp
   test_helpers.cpp
-  test_utils.cpp
   test_recorder.cpp
   test_recorder_manager.cpp
   ${RECORDER_SOURCES}
