@@ -17,13 +17,13 @@ class FixedBuffer {
  public:
   FixedBuffer() = default;
   ~FixedBuffer() = default;
-  FixedBuffer(const FixedBuffer &) = delete;
-  FixedBuffer(FixedBuffer &&) = delete;
-  FixedBuffer &operator=(const FixedBuffer &) = delete;
-  FixedBuffer &operator=(FixedBuffer &&) = delete;
-  
+  FixedBuffer(const FixedBuffer&) = delete;
+  FixedBuffer(FixedBuffer&&) = delete;
+  FixedBuffer& operator=(const FixedBuffer&) = delete;
+  FixedBuffer& operator=(FixedBuffer&&) = delete;
+
   /// @brief 追加数据到内部数组尾部
-  void Append(const std::uint8_t *buf, size_t len) {
+  void Append(const std::uint8_t* buf, size_t len) {
     if (Avail() >= len) {
       std::memcpy(data_.data() + cur_, buf, len);
       cur_ += static_cast<int>(len);  // len ≤ Avail() ≤ SIZE，转换不会溢出
@@ -31,7 +31,7 @@ class FixedBuffer {
   }
 
   /// @brief 获取内部数组的指针
-  const std::uint8_t *Data() const { return data_.data(); }
+  const std::uint8_t* Data() const { return data_.data(); }
   /// @brief 已写入数据长度
   int Length() const { return cur_; }
   /// @brief 可用空间大小

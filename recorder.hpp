@@ -10,6 +10,7 @@
 #include <fstream>
 #include <memory>
 #include <mutex>
+#include <shared_mutex>
 #include <string>
 #include <thread>
 
@@ -38,6 +39,9 @@ class Recorder {
 
   /// @brief 析构函数
   ~Recorder();
+
+  /// @brief 停止接收数据，完成落盘并等待写线程结束；可重复调用
+  void Close() noexcept;
 
   /// @brief 保存数据，由外部调用
   /// @return false：未接收（参数非法、已停机、超过缓存容量），或队列满丢了更早的缓存
@@ -112,6 +116,7 @@ class Recorder {
   std::atomic<WriteIoState> write_io_state_{WriteIoState::kOk};  // 供 Save 与外部查询
   std::atomic<const char*> last_error_{nullptr};                 // 致命错误信息
 
+  mutable std::shared_mutex lifecycle_lock_;              // Save 共享、Close 独占，保证关闭安全
   mutable std::mutex lock_buffers_;                       // 保护 current_buffer_ 与 free_queue_
   std::unique_ptr<BufferType> current_buffer_{};          // 当前可用缓存
   std::deque<std::unique_ptr<BufferType>> free_queue_{};  // 空缓存队列

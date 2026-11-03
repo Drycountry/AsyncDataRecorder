@@ -1,101 +1,59 @@
-# AsyncDataRecorder
+# AsyncBinaryRecorder
 
-一个基于 C++17 的轻量级异步二进制数据记录器。调用线程将数据提交到内存缓冲区，由后台线程批量写入文件，适合需要将数据采集与文件 I/O 解耦的场景。
+AsyncBinaryRecorder 是一个轻量级的 C++ 二进制数据记录工具。
 
-## 功能特性
+它可以在采集数据时快速接收内容，由后台自动写入磁盘，减少文件读写对主流程的影响。它适合持续采集的传感器数据、实时运行日志、设备采样结果等二进制数据归档场景。
 
-- **异步写入**：`Save()` 将数据复制到内部缓冲区，文件 I/O 在后台线程执行。
-- **批量落盘**：满缓冲块累计到一定数量时触发写入；没有新数据时，后台线程也会定期检查并提交当前缓冲区。
-- **有界待写队列**：限制满缓冲队列长度，避免写入速度跟不上时队列无限增长。
-- **文件分段与轮转**：每段文件关闭时使用创建和关闭时间戳命名；文件达到约 2 GiB 后开始新文件段。
-- **关闭时收尾**：记录器析构时停止接收数据，并等待后台写线程退出。
-- **并发访问**：`RecorderManager` 可按 ID 获取共享的记录器实例。
+## 主要特点
 
-## 环境要求
+- **录制简单**：传入数据内容和长度即可保存。
+- **后台写入**：数据采集与磁盘写入互不干扰，适合长时间持续录制。
+- **自动分段**：文件变大或记录结束时自动生成独立文件，便于后续传输和查看。
+- **数据保真**：写入内容与原数据一致，不会修改或重新编码。
+- **多任务记录**：可以按不同 ID 同时管理多个记录任务。
 
-- C++17 或更新的 C++ 编译器
-- CMake 3.20 或更新版本
+## 快速开始
 
-## 构建
-
-在项目根目录执行：
+环境要求：支持 C++17 的编译器，以及 CMake 3.20 或更新版本。项目无需额外安装第三方组件。
 
 ```bash
 cmake -S . -B build
 cmake --build build --config Release
 ```
 
-运行示例程序：
+构建后运行示例程序即可生成演示录制文件：
 
 ```bash
-# Windows（Visual Studio 多配置生成器）
-.\build\Release\AsyncDataRecorder.exe
+# Windows
+.\build\Release\AsyncBinaryRecorder.exe
 
 # Linux / macOS
-./build/AsyncDataRecorder
+./build/AsyncBinaryRecorder
 ```
 
-示例会在当前工作目录生成以记录器 ID 和时间戳命名的 `.dat` 文件。
-
-## 使用示例
+## 基本用法
 
 ```cpp
 #include <cstdint>
+#include <string>
 
 #include "recorder.hpp"
 
 int main() {
   jojo::record2::Recorder recorder("session", ".dat");
 
-  const std::uint8_t payload[] = {0x01, 0x02, 0x03, 0x04};
-  const bool accepted = recorder.Save(payload, sizeof(payload));
+  const std::string message = "Hello, AsyncBinaryRecorder!";
+  const auto* data =
+      reinterpret_cast<const std::uint8_t*>(message.data());
 
-  // recorder 析构时会停止接收数据，并等待后台写线程结束。
-  return accepted ? 0 : 1;
+  recorder.Save(data, message.size());
 }
 ```
 
-记录器将数据**原样写入二进制文件**，不会添加记录分隔符或转换数据格式。数据按块写入文件，不保证每次 `Save()` 对应一个独立文件记录。
+`Save()` 返回 `false` 时，表示本次数据未被接收，或已有数据未能安全保存。长时间录制时，建议检查返回值并处理异常情况。
 
-### 写入状态
+## 录制文件
 
-```cpp
-const auto state = recorder.GetWriteState();
-```
+录制文件默认以 `.dat` 结尾，文件名包含记录器名称和生成时间。每次录制结束后会保留一个完整文件，不会覆盖已有文件。
 
-`GetWriteState()` 返回以下状态：
-
-- `WriteIoState::kOk`：文件可写。打开文件后从未写过数据时也会报此状态，写失败后需等到下一次写完并刷新成功才恢复。
-- `WriteIoState::kRetrying`：文件打开或写文件失败，正在退避重试。
-- `WriteIoState::kFatal`：文件打开失败或连续写文件失败达到上限，记录器已停止接收数据。
-- `WriteIoState::kStopped`：写线程已停止。
-
-`Save()` 在参数无效、记录器停止接收、单次数据超过内部缓冲区容量，或队列满导致缓冲块被丢弃时返回 `false`。队列满时被丢弃的是此前缓冲的数据，本条数据已被接收。记录器不统计丢弃字节数；若写入失败或记录器进入 `kFatal`/`kStopped`，应以 `Save()` 返回 `false` 与 `GetWriteState()` 判断是否需要重试或告警。`GetLastError()` 可查询进入 `kFatal` 的原因。
-
-## 文件命名
-
-已关闭的文件段命名格式为：
-
-```text
-<基础文件名>_<创建时间>_<关闭时间><扩展名>
-```
-
-例如：
-
-```text
-session_20261015T104827.321_20261015T104832.456.dat
-```
-
-时间戳使用本地时间，精确到毫秒。写入期间使用不带扩展名的临时文件名；正常关闭后，非空文件会重命名为上述格式。若定型文件名已被占用（同一毫秒建立、同一毫秒关闭的同名记录器），会在扩展名前追加 `_1`、`_2` 等序号，不会覆盖已有文件。
-
-## 项目结构
-
-```text
-.
-├── CMakeLists.txt
-├── main.cpp                 # 示例程序入口
-├── recorder.hpp/.cpp        # 异步记录器（时间戳工具也在 recorder.cpp 内）
-├── recorder_manager.hpp/.cpp # 按 ID 管理记录器
-├── fixed_buffer.hpp         # 固定大小缓冲区
-└── test/                    # GoogleTest 单元测试
-```
+文件内容是原始二进制数据，适合由读取程序按预先约定的格式解析。

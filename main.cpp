@@ -8,8 +8,8 @@
 
 int main() {
   jojo::record2::RecorderManager manager;
-  auto recorder1 = manager.GetRecorder("1");
-  auto recorder2 = manager.GetRecorder("2");
+  auto recorder1 = manager.CreateRecorder("1");
+  auto recorder2 = manager.CreateRecorder("2");
 
   std::vector<std::uint8_t> vec{1, 2, 3, 4, 5};
 
@@ -18,4 +18,6 @@ int main() {
 
   std::string content{"我爱你中国"};
   recorder2->Save(reinterpret_cast<const std::uint8_t*>(content.data()), content.size());
+
+  manager.CloseAllRecorders();
 }

@@ -9,12 +9,12 @@
 #include <thread>
 
 namespace {
-constexpr static inline std::size_t kQueueSizeNotifyLimit{5};  // 满缓存队列容量通知上限
-constexpr static inline std::size_t kMaxFullQueueSize{50};     // 满缓存容量上限
-constexpr static inline std::chrono::seconds kTimeLimit{5};    // 落盘周期
-constexpr static inline int kFileOpenRetryTimesLimit{10};      // 尝试打开文件次数上限
-constexpr static inline int kWriteFailTimesLimit{10};          // 连续写失败次数上限
-constexpr static inline std::size_t kMaxFileSize{2147483648};  // 单文件上限（2GB），超过就换下一个文件
+constexpr static inline std::size_t kQueueSizeNotifyLimit{5};            // 满缓存队列容量通知上限
+constexpr static inline std::size_t kMaxFullQueueSize{50};               // 满缓存容量上限
+constexpr static inline std::chrono::seconds kTimeLimit{5};              // 落盘周期
+constexpr static inline int kFileOpenRetryTimesLimit{10};                // 尝试打开文件次数上限
+constexpr static inline int kWriteFailTimesLimit{10};                    // 连续写失败次数上限
+constexpr static inline std::size_t kMaxFileSize{std::size_t{2} << 30};  // 单文件上限（2GB），超过就换下一个文件
 
 /// @brief 路径是否存在；查询出错时按不存在处理
 bool PathExists(const std::string& path) {
@@ -59,34 +59,43 @@ Recorder::Recorder(const std::string& basic_filename, const std::string& ext)
 }
 
 /// @brief 析构函数
-Recorder::~Recorder() {
-  // 若 Recorder 使用智能指针管理，那么当进入析构函数，则智能指针的引用计数一定降为了 0，不会发生析构中调用 Save
-  // 函数的情况
+Recorder::~Recorder() { Close(); }
+
+/// @brief 显式关闭 Recorder
+void Recorder::Close() noexcept {
+  // 等待所有进行中的 Save 完成；此后新的 Save 会在受保护区内看到 accepting_ 为 false。
+  std::unique_lock<std::shared_mutex> lifecycle_lock{lifecycle_lock_};
+  accepting_.store(false, std::memory_order_release);
 
   // 将当前缓存写入 full_queue_，写入文件
   std::unique_ptr<BufferType> pending{};
-  {
-    std::scoped_lock lock{lock_buffers_};
-    pending = std::move(current_buffer_);
-  }
+  try {
+    {
+      std::scoped_lock lock{lock_buffers_};
+      pending = std::move(current_buffer_);
+    }
 
-  {
-    std::scoped_lock lock{lock_full_queue_};
     if (pending != nullptr) {
+      std::scoped_lock lock{lock_full_queue_};
       full_queue_.push_back(std::move(pending));  // 最后一段不受队列上限限制，因此不使用 PushToFullQueue
     }
-    accepting_.store(false, std::memory_order_release);
+  } catch (...) {
+    last_error_.store("发生致命错误，关闭时缓存入队失败", std::memory_order_release);
+    write_io_state_.store(WriteIoState::kFatal, std::memory_order_release);
   }
 
   // 通知写入文件，线程自然退出
   cv_write_file_.notify_one();
-  thread_.join();
 
-  DeallocBuffers();
+  if (thread_.joinable()) {
+    thread_.join();
+  }
 }
 
 /// @brief 保存数据，由外部调用
 bool Recorder::Save(const std::uint8_t* data, const std::size_t length) {
+  std::shared_lock<std::shared_mutex> lifecycle_lock{lifecycle_lock_};
+
   if (data == nullptr || length == 0) {
     return false;
   }
